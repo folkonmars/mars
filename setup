@@ -1,0 +1,149 @@
+#!/bin/bash
+MEDIA_PATH="media.zip"
+MEDIA_REMOTE="https://skihill.net/.repo/legacy/media.zip"
+
+printf "Downloading media.zip... ($MEDIA_REMOTE)\n"
+DOWNLOAD="y"
+if [ -f "$MEDIA_PATH" ]; then
+	printf "media.zip file exists! redownload? (y/n): "
+	read DOWNLOAD
+fi
+
+if [ "$DOWNLOAD" == "y" ]; then
+	wget "$MEDIA_REMOTE" -q -O "$MEDIA_PATH"
+fi
+
+NGINX_CONFIG_FILE=$(nginx -V 2>&1 | grep -o '\-\-conf-path=\(.*conf\)' | cut -d '=' -f2)
+
+printf "Please enter hostname (localhost): "
+read HOSTNAME
+if [ "$HOSTNAME" == "" ]; then
+	HOSTNAME="localhost"
+fi
+
+
+printf "Please enter your server external IP (127.0.0.1): "
+read EXTERNAL_IP
+if [ "$EXTERNAL_IP" == "" ]; then
+	EXTERNAL_IP="127.0.0.1"
+fi
+
+read -d '' NGINX_CONFIG <<"EOF"
+user www-data;
+worker_processes auto;
+pid /run/nginx.pid;
+
+events {
+	worker_connections 768;
+}
+
+http {
+	sendfile on;
+	tcp_nopush on;
+	tcp_nodelay on;
+	keepalive_timeout 65;
+	types_hash_max_size 2048;
+	server_tokens off;
+	include /etc/nginx/mime.types;
+
+	default_type application/octet-stream;
+	ssl_protocols TLSv1 TLSv1.1 TLSv1.2;
+	ssl_prefer_server_ciphers on;
+
+	access_log /var/log/nginx/access.log;
+	error_log /var/log/nginx/error.log;
+
+	gzip on;
+	gzip_disable "msie6";
+
+	server {
+		listen  80;
+		server_name     host;
+
+		root /var/www/html;
+		index index.html index.htm index.php;
+
+		location / {
+			try_files $uri $uri/ =404;
+		}
+	}
+
+	server {
+		listen	80;
+		server_name	play.host;
+
+		root /var/www/play;
+		index index.html index.htm index.php;
+
+		location / {
+			try_files $uri $uri/ =404;
+		}
+	}
+
+	server {
+		listen  80;
+		server_name     media.host;
+
+		root /var/www/media;
+		index index.html index.htm index.php;
+
+		location / {
+			try_files $uri $uri/ =404;
+		}
+	}
+
+	#include /etc/nginx/conf.d/*.conf;
+	#include /etc/nginx/sites-enabled/*;
+}
+EOF
+if [ -f "$MEDIA_PATH" ]; then
+	printf "Unzipping media...\n"
+	unzip -o media.zip -d /var/www/ >> /dev/null
+else
+	printf "Unable to find media.zip!\n"
+fi
+if [ -f "$NGINX_CONFIG_FILE" ]; then
+	if ! [ -f "$NGINX_CONFIG_FILE.old" ]; then
+		printf "Backing up nginx configuration file ($NGINX_CONFIG_FILE)\n"
+		cp "$NGINX_CONFIG_FILE" "$NGINX_CONFIG_FILE.old"
+	fi
+
+	printf "Writing nginx configuration file ($NGINX_CONFIG_FILE)\n"
+	NGINX_CONFIG=${NGINX_CONFIG//host/$HOSTNAME}
+	echo "$NGINX_CONFIG" > "$NGINX_CONFIG_FILE"
+else
+	printf "Unable to write nginx configuration\n"
+fi
+if [ "$HOSTNAME" == "localhost" ]; then
+	if ! grep -q "127.0.0.1 play.localhost" "/etc/hosts"; then
+		printf "Hostname is 'localhost', writing to /etc/hosts\n"
+		echo "127.0.0.1 play.localhost" >> "/etc/hosts"
+		echo "127.0.0.1 media.localhost" >> "/etc/hosts"
+	fi
+fi
+printf "Updating media domain media.$HOSTNAME\n"
+SED_ARGS="-i -e 's/media.localhost/media.$HOSTNAME/g' /var/www/play/index.html"
+eval sed "$SED_ARGS"
+SED_ARGS="-i -e 's/media.localhost/media.$HOSTNAME/g' /var/www/play/en/index.html"
+eval sed "$SED_ARGS"
+SED_ARGS="-i -e 's/media.localhost/media.$HOSTNAME/g' /var/www/play/es/index.html"
+eval sed "$SED_ARGS"
+SED_ARGS="-i -e 's/media.localhost/media.$HOSTNAME/g' /var/www/play/fr/index.html"
+eval sed "$SED_ARGS"
+SED_ARGS="-i -e 's/media.localhost/media.$HOSTNAME/g' /var/www/play/pt/index.html"
+eval sed "$SED_ARGS"
+
+printf "Updating external IP $EXTERNAL_IP\n"
+SED_ARGS="-i -e 's/127.0.0.1/$EXTERNAL_IP/g' /var/www/play/index.html"
+eval sed "$SED_ARGS"
+SED_ARGS="-i -e 's/127.0.0.1/$EXTERNAL_IP/g' /var/www/play/en/index.html"
+eval sed "$SED_ARGS"
+SED_ARGS="-i -e 's/127.0.0.1/$EXTERNAL_IP/g' /var/www/play/es/index.html"
+eval sed "$SED_ARGS"
+SED_ARGS="-i -e 's/127.0.0.1/$EXTERNAL_IP/g' /var/www/play/fr/index.html"
+eval sed "$SED_ARGS"
+SED_ARGS="-i -e 's/127.0.0.1/$EXTERNAL_IP/g' /var/www/play/pt/index.html"
+eval sed "$SED_ARGS"
+
+printf "Restarting nginx...\n"
+sudo service nginx restart
